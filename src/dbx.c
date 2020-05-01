@@ -8,6 +8,8 @@
 #include "../rmutil/vector.h"
 #include "../rmutil/test_util.h"
 
+static int rn;
+
 /* Helper function: compiles a regex, or dies complaining. */
 int regexCompile(RedisModuleCtx *ctx, regex_t *r, const char *t) {
   int status = regcomp(r, t, REG_EXTENDED | REG_NOSUB | REG_NEWLINE);
@@ -100,7 +102,7 @@ void showRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vSelect) {
   for(size_t i = 0; i < nSelected; i++) {
     Vector_Get(vSelect, i, &field);
 
-    // If '*' is specified in selected hash list, display all hashs then
+    // If '*' is specified in selected hash list, display all hashes then
     if (strcmp(field, "*") == 0) {
       RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGETALL", "s", key);
       size_t tf = RedisModule_CallReplyLength(tags);
@@ -135,6 +137,46 @@ void showRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vSelect) {
     }
   }
   RedisModule_ReplySetArrayLength(ctx, n);
+}
+
+void intoRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vSelect, char *intoKey) {
+  char* field;
+  size_t nSelected = Vector_Size(vSelect);
+  char newkey[64];
+
+  sprintf(newkey, "%s:%u-%i", intoKey, (unsigned)time(NULL), rn++);
+  for(size_t i = 0; i < nSelected; i++) {
+    Vector_Get(vSelect, i, &field);
+
+    // If '*' is specified in selected hash list, display all hashes then
+    if (strcmp(field, "*") == 0) {
+      RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGETALL", "s", key);
+      size_t tf = RedisModule_CallReplyLength(tags);
+      if (tf > 0) {
+        for(size_t j=0; j<tf; j+=2) {
+          RedisModuleString *rms1 = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(tags, j));
+          RedisModuleString *rms2 = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(tags, j+1));
+          RedisModule_Call(ctx, "HSET", "css", newkey, rms1, rms2);
+          RedisModule_FreeString(ctx, rms1);
+          RedisModule_FreeString(ctx, rms2);
+        }
+      }
+      RedisModule_FreeCallReply(tags);
+    }
+    else {
+      // Display the hash name and content
+      RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGET", "sc", key, field);
+      if (RedisModule_CallReplyLength(tags) > 0) {
+        RedisModuleString *rms = RedisModule_CreateStringFromCallReply(tags);
+        RedisModule_Call(ctx, "HSET", "ccs", newkey, field, rms);
+        RedisModule_FreeString(ctx, rms);
+      }
+      else
+        RedisModule_Call(ctx, "HSET", "ccc", newkey, field, "");
+      RedisModule_FreeCallReply(tags);
+    }
+  }
+  RedisModule_ReplyWithSimpleString(ctx, newkey);
 }
 
 /* Split the string by specified delimilator */
@@ -178,7 +220,7 @@ Vector* splitWhereString(char *s) {
   return v;
 }
 
-int processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere) {
+int processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere, char *intoKey) {
   size_t nKeys = RedisModule_CallReplyLength(keys);
   size_t affected = 0;
   for (size_t i = 0; i < nKeys; i++) {
@@ -187,7 +229,10 @@ int processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, 
     const char *s = RedisModule_StringPtrLen(key, &l);
     if (!regexec(r, s, 1, NULL, 0)) {
       if (vWhere == NULL || whereRecord(ctx, key, vWhere)) {
-        showRecord(ctx, key, vSelect);
+        if (strlen(intoKey) > 0)
+          intoRecord(ctx, key, vSelect, intoKey);
+        else
+          showRecord(ctx, key, vSelect);
         affected++;
       }
     }
@@ -238,6 +283,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
   // Table
   RedisModuleString *fromKeys;
+  char intoKey[32] = "";
 
   // Process the arguments
   size_t plen;
@@ -281,8 +327,10 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
     switch(step) {
       case 0:
-        if (strcmp("from", token) == 0)
+        if (strcmp("into", token) == 0)
           step = -1;
+        else if (strcmp("from", token) == 0)
+          step = -3;
         else {
           if (strlen(stmSelect) + strlen(token) > 512) {
             RedisModule_ReplyWithError(ctx, "select arguments are too long");
@@ -292,25 +340,34 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         }
         break;
       case -1:
-        // parse from clause
-        fromKeys = RMUtil_CreateFormattedString(ctx, token);
-        step = 2;
+        // parse into clause, assume time+rand always is new key
+        strcpy(intoKey, token);
+        step = -2;
         break;
-      case 2:
-        if (strcmp("where", token) == 0)
+      case -2:
+        if (strcmp("from", token) == 0)
           step = -3;
-        else if (strcmp("order", token) == 0)
-          step = -5;
         else {
-          RedisModule_ReplyWithError(ctx, "where or order statement is expected");
+          RedisModule_ReplyWithError(ctx, "from keyword is expected");
           return REDISMODULE_ERR;
         }
         break;
       case -3:
+        // parse from clause
+        fromKeys = RMUtil_CreateFormattedString(ctx, token);
+        step = 4;
+        break;
       case 4:
+        if (strcmp("where", token) == 0)
+          step = -5;
+        else if (strcmp("order", token) == 0)
+          step = -7;
+        break;
+      case -5:
+      case 6:
         // parse where clause
         if (strcmp("order", token) == 0)
-          step = -5;
+          step = -7;
         else if (strcmp("and", token) == 0)
           strcat(stmWhere, "&&");
         else {
@@ -321,19 +378,19 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
           char *p = token;
           while (*p++) *p = *p == 7? 32: *p;
           strcat(stmWhere, token);
-          step = 4;
+          step = 6;
         }
         break;
-      case -5:
+      case -7:
         if (strcmp("by", token) == 0)
-          step = -6;
+          step = -8;
         else {
           RedisModule_ReplyWithError(ctx, "missing 'by' after order");
           return REDISMODULE_ERR;
         }
         break;
-      case -6:
-      case 7:
+      case -8:
+      case 9:
         // parse order clause
         if (strlen(stmOrder) + strlen(token) > 512) {
           RedisModule_ReplyWithError(ctx, "order arguments are too long");
@@ -344,7 +401,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         else
         if (strcmp("asc", token) != 0)
           strcat(stmOrder, token);
-        step = 7;
+        step = 9;
         break;
     }
     token = strtok(NULL, " ");
@@ -372,7 +429,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   if (Vector_Size(vOrder) > 0) {
     // temporary set name
     char setName[32];
-    sprintf(setName, "__db_tempset_%i", rand());
+    sprintf(setName, "__db_tempset_%i", rn++);
 
     char stmt[128];
     RedisModuleCallReply *rep;
@@ -390,7 +447,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         sprintf(stmt, "*->%s", field);
         rep = RedisModule_Call(ctx, "SORT", "cccc", setName, "by", stmt, "alpha");
       }
-      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL);
+      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL, intoKey);
       RedisModule_FreeCallReply(rep);
 
       // set number of output
@@ -416,7 +473,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
       /* Filter by pattern matching. */
       RedisModuleCallReply *rkeys = RedisModule_CallReplyArrayElement(rep, 1);
 
-      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere);
+      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere, intoKey);
 
       RedisModule_FreeCallReply(rep);
     } while (lcursor);
@@ -486,7 +543,7 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         break;
       case -1:
         // parse into clause, assume time+rand always is new key
-        intoKey = RMUtil_CreateFormattedString(ctx, "%s:%u-%i", token, (unsigned)time(NULL), rand());
+        intoKey = RMUtil_CreateFormattedString(ctx, "%s:%u-%i", token, (unsigned)time(NULL), rn++);
         step = -2;
         break;
       case -2:
@@ -736,6 +793,8 @@ int ExecCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 }
 
 int RedisModule_OnLoad(RedisModuleCtx *ctx) {
+
+  rn = rand();
 
   // Register the module
   if (RedisModule_Init(ctx, "dbx", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR)
