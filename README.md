@@ -142,6 +142,57 @@ Ordering can be ascending or descending. All sortings are alpha-sort.
 ...
 ```
 
+#### Into Clause in Select Statement
+You could create another table by into clause.
+```bash
+127.0.0.1:6379> dbx select * into testbook from phonebook
+1) testbook:1588325407-1751904058
+2) testbook:1588325407-1751904059
+3) testbook:1588325407-1751904060
+4) testbook:1588325407-1751904061
+127.0.0.1:6379> dbx select * from testbook
+1)  1) "name"
+    2) "Mattias Swensson"
+    3) "tel"
+    4) "1-888-3333-1412"
+    5) "birth"
+    6) "2017-06-30"
+    7) "pos"
+    8) "4"
+    9) "gender"
+   10) "M"
+2)  1) "name"
+    2) "Peter Nelson"
+    3) "tel"
+    4) "1-456-1246-3421"
+    5) "birth"
+    6) "2019-10-01"
+    7) "pos"
+    8) "3"
+    9) "gender"
+   10) "M"
+3)  1) "name"
+    2) "Bloody Mary"
+    3) "tel"
+    4) "1-666-1234-9812"
+    5) "birth"
+    6) "2018-01-31"
+    7) "pos"
+    8) "2"
+    9) "gender"
+   10) "F"
+4)  1) "name"
+    2) "Betty Joan"
+    3) "tel"
+    4) "1-444-9999-1112"
+    5) "birth"
+    6) "2019-12-01"
+    7) "pos"
+    8) "1"
+    9) "gender"
+   10) "F"
+```
+
 #### Delete Statement
 You may also use Insert and Delete statement to operate the hash. If you does not provide the where clause, it will delete all the records of the specified key prefix. (i.e. phonebook)
 ```bash
