@@ -41,50 +41,52 @@ int whereRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vWhere) {
   int match = 1;
 
   // If where statement is defined, get the specified hash content and do comparison
-  if (Vector_Size(vWhere) == 3) {
-    Vector_Get(vWhere, 0, &field);
-    Vector_Get(vWhere, 1, &condition);
-    Vector_Get(vWhere, 2, &w);
+  size_t n = Vector_Size(vWhere);
+  if (n == 0) return 1;
+  if (n % 3 != 0) return 0;
+  for (size_t i = 0; i < n; i += 3) {
+    Vector_Get(vWhere, i, &field);
+    Vector_Get(vWhere, i+1, &condition);
+    Vector_Get(vWhere, i+2, &w);
     if (condition == 7)
       toLower(w);
-    if (strlen(w) == 0)
-      match = 0;
-    else {
-      RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGET", "sc", key, field);
-      if (RedisModule_CallReplyLength(tags) > 0) {
-        RedisModuleString *rms = RedisModule_CreateStringFromCallReply(tags);
-        size_t l;
-        const char *s = RedisModule_StringPtrLen(rms, &l);
-        switch(condition) {
-          case 0:
-            match = strcmp(s, w) >= 0? 1: 0;
-            break;
-          case 1:
-            match = strcmp(s, w) <= 0? 1: 0;
-            break;
-          case 2:
-          case 3:
-            match = strcmp(s, w) != 0? 1: 0;
-            break;
-          case 4:
-            match = strcmp(s, w) > 0? 1: 0;
-            break;
-          case 5:
-            match = strcmp(s, w) < 0? 1: 0;
-            break;
-          case 6:
-            match = strcmp(s, w) == 0? 1: 0;
-            break;
-          case 7:
-            match = strstr(toLower((char*)s), w)? 1: 0;
-            break;
-        }
-        RedisModule_FreeString(ctx, rms);
-        RedisModule_FreeCallReply(tags);
-      }
-      else
-        match = 0;
+    if (strlen(w) == 0) return 0;
+
+    RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGET", "sc", key, field);
+    if (RedisModule_CallReplyLength(tags) == 0) {
+      RedisModule_FreeCallReply(tags);
+      return 0;
     }
+    RedisModuleString *rms = RedisModule_CreateStringFromCallReply(tags);
+    size_t l;
+    const char *s = RedisModule_StringPtrLen(rms, &l);
+    switch(condition) {
+      case 0:
+        match = strcmp(s, w) >= 0? 1: 0;
+        break;
+      case 1:
+        match = strcmp(s, w) <= 0? 1: 0;
+        break;
+      case 2:
+      case 3:
+        match = strcmp(s, w) != 0? 1: 0;
+        break;
+      case 4:
+        match = strcmp(s, w) > 0? 1: 0;
+        break;
+      case 5:
+        match = strcmp(s, w) < 0? 1: 0;
+        break;
+      case 6:
+        match = strcmp(s, w) == 0? 1: 0;
+        break;
+      case 7:
+        match = strstr(toLower((char*)s), w)? 1: 0;
+        break;
+    }
+    RedisModule_FreeString(ctx, rms);
+    RedisModule_FreeCallReply(tags);
+    if (match == 0) return 0;
   }
   return match;
 }
@@ -154,20 +156,24 @@ Vector* splitStringByChar(char *s, char* d) {
 
 Vector* splitWhereString(char *s) {
   Vector *v = NewVector(void *, 16);
-  static char chk[8][3] = {">=", "<=", "!=", "<>", ">", "<", "=", "~"};
-  char *p = s;
-  while(*p++) {
-    for(int i=0; i<8; i++) {
-      char *c = chk[i];
-      if (strncmp(c, p, strlen(c)) == 0) {
-        *p = 0;
-        p += strlen(c);
-        Vector_Push(v, s);
-        Vector_Push(v, i);
-        Vector_Push(v, p);
-        break;
+  char *token = strtok(s, "&&");
+  while (token != NULL) {
+    static char chk[8][3] = {">=", "<=", "!=", "<>", ">", "<", "=", "~"};
+    char *p = token;
+    while(*p++) {
+      for(int i=0; i<8; i++) {
+        char *c = chk[i];
+        if (strncmp(c, p, strlen(c)) == 0) {
+          *p = 0;
+          p += strlen(c);
+          Vector_Push(v, token);
+          Vector_Push(v, i);
+          Vector_Push(v, p);
+          break;
+        }
       }
     }
+    token = strtok(NULL, "&&");
   }
   return v;
 }
@@ -283,7 +289,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         }
         break;
       case -1:
-        // parse from statement
+        // parse from clause
         fromKeys = RMUtil_CreateFormattedString(ctx, token);
         step = 2;
         break;
@@ -299,9 +305,11 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         break;
       case -3:
       case 4:
-        // parse where statement
+        // parse where clause
         if (strcmp("order", token) == 0)
           step = -5;
+        else if (strcmp("and", token) == 0)
+          strcat(stmWhere, "&&");
         else {
           if (strlen(stmWhere) + strlen(token) > 512) {
             RedisModule_ReplyWithError(ctx, "where arguments are too long");
@@ -323,7 +331,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         break;
       case -6:
       case 7:
-        // parse order statement
+        // parse order clause
         if (strlen(stmOrder) + strlen(token) > 512) {
           RedisModule_ReplyWithError(ctx, "order arguments are too long");
           return REDISMODULE_ERR;
@@ -471,7 +479,7 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         }
         break;
       case -1:
-        // parse into key, assume time+rand always is new key
+        // parse into clause, assume time+rand always is new key
         intoKey = RMUtil_CreateFormattedString(ctx, "%s:%u-%i", token, (unsigned)time(NULL), rand());
         step = -2;
         break;
@@ -615,7 +623,7 @@ int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         }
         break;
       case -1:
-        // parse from statement
+        // parse from clause
         fromKeys = RMUtil_CreateFormattedString(ctx, token);
         step = 2;
         break;
@@ -629,14 +637,19 @@ int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         break;
       case -3:
       case 4:
+        // parse where clause
         if (strlen(stmWhere) + strlen(token) > 512) {
           RedisModule_ReplyWithError(ctx, "where arguments are too long");
           return REDISMODULE_ERR;
         }
-        char *p = token;
-        while (*p++) *p = *p == 7? 32: *p;
-        strcat(stmWhere, token);
-        step = 4;
+        if (strcmp("and", token) == 0)
+          strcat(stmWhere, "&&");
+        else {
+          char *p = token;
+          while (*p++) *p = *p == 7? 32: *p;
+          strcat(stmWhere, token);
+          step = 4;
+        }
         break;
     }
     token = strtok(NULL, " ");

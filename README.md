@@ -120,17 +120,20 @@ The above is nearly like REDIS keys command
 
 Each record is exactly a hash, you could use raw REDIS commands ``hget, hmget or hgetall`` to retrieve the same content
 
-#### Where in Select Statement
-This module supports =, >, <, >=, <=, <>, != and like conditions. Only single condition is allowed.
+#### Where Clause in Select Statement
+Your could specify =, >, <, >=, <=, <>, != or like conditions in where clause. Now the module only support "and" to join multiple conditions.
 ```bash
 127.0.0.1:6379> dbx.select tel from phonebook where name like Son
 1) 1) tel
    2) "1-888-3333-1412"
 2) 1) tel
    2) "1-456-1246-3421"
+127.0.0.1:6379> dbx.select tel from phonebook where name like Son and pos = 4
+1) 1) tel
+   2) "1-888-3333-1412"
 ```
 
-#### Order in Select Statement
+#### Order Clause in Select Statement
 Ordering can be ascending or descending. All sortings are alpha-sort.
 ```bash
 127.0.0.1:6379> dbx.select * from phonebook order by pos asc
@@ -140,7 +143,7 @@ Ordering can be ascending or descending. All sortings are alpha-sort.
 ```
 
 #### Delete Statement
-You may also use Insert and Delete statement to operate the hash
+You may also use Insert and Delete statement to operate the hash. If you does not provide the where clause, it will delete all the records of the specified key prefix. (i.e. phonebook)
 ```bash
 127.0.0.1:6379> dbx.delete from phonebook where gender = F
 (integer) 2
@@ -149,6 +152,7 @@ You may also use Insert and Delete statement to operate the hash
 ```
 
 #### Insert Statement
+The module provide simple Insert statement which same as the function of the REDIS command hmset. It will append a random string to your provided key (i.e. phonebook). If operation is successful, it will return the key name.
 ```bash
 127.0.0.1:6379> dbx.insert into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson'     ,1-456-1246-3421, 2019-10-01, 3, M)
 "phonebook:1588298418-551514504"
@@ -159,7 +163,7 @@ You may also use Insert and Delete statement to operate the hash
 127.0.0.1:6379> dbx.insert into phonebook (name,tel,birth,pos,gender) values ('Mattias Swensson' ,1-888-3333-1412, 2017-06-30, 4, M)
 "phonebook:1588299202-1052597574"
 ```
-Please be noted that Redis requires at least one space after the single and double quoted arguments.
+Note that Redis requires at least one space after the single and double quoted arguments.
 Or you may quote the whole SQL statement as below:
 ```bash
 127.0.0.1:6379> dbx.insert "into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson','1-456-1246-3421','2019-10-01',3, 'M')"
@@ -204,4 +208,4 @@ REDIS v4.0
 MIT
 
 ## Status
-Now the Select statement only supports single where condition and single order sequence. I will add more useful features in the future. Simple Insert, Update and Delete statement will be included finally. This project is in an early stage of development. Any contribution is welcome :D
+This project is in an early stage of development. Any contribution is welcome :D
