@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <regex.h>
 #include <ctype.h>
+#include <time.h>
 #include "../redismodule.h"
 #include "../rmutil/util.h"
 #include "../rmutil/strings.h"
@@ -111,18 +112,23 @@ void showRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vSelect) {
       }
       RedisModule_FreeCallReply(tags);
     }
+    else if (strcmp(field, "rowid()") == 0) {
+      RedisModule_ReplyWithSimpleString(ctx, field);
+      RedisModule_ReplyWithString(ctx, key);
+      n += 2;
+    }
     else {
       // Display the hash name and content
+      RedisModule_ReplyWithSimpleString(ctx, field);
       RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGET", "sc", key, field);
       if (RedisModule_CallReplyLength(tags) > 0) {
         RedisModuleString *rms = RedisModule_CreateStringFromCallReply(tags);
-        RedisModule_ReplyWithSimpleString(ctx, field);
         RedisModule_ReplyWithString(ctx, rms);
         RedisModule_FreeString(ctx, rms);
       }
       else
         RedisModule_ReplyWithNull(ctx); // If hash is undefined
-      n+=2;
+      n += 2;
       RedisModule_FreeCallReply(tags);
     }
   }
@@ -186,7 +192,7 @@ int processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, 
 
 /* Create temporary set for sorting */
 int buildSetByPattern(RedisModuleCtx *ctx, regex_t *r, char *setName, Vector *vWhere) {
-  RedisModule_Call(ctx, "del", "c", setName);
+  RedisModule_Call(ctx, "DEL", "c", setName);
   RedisModuleString *scursor = RedisModule_CreateStringFromLongLong(ctx, 0);
   long long lcursor;
   size_t affected = 0;
@@ -416,6 +422,278 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   return REDISMODULE_OK;
 }
 
+int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+  if (argc < 2)
+    return RedisModule_WrongArity(ctx);
+
+  // Table
+  RedisModuleString *intoKey;
+
+  // Process the arguments
+  size_t plen;
+  char s[1024] = "";
+  for (int i=1; i<argc; i++) {
+    if (strlen(s) > 0) strcat(s, " ");
+    const char *temp = RedisModule_StringPtrLen(argv[i], &plen);
+    if (strlen(s) + plen > 1024) {
+        RedisModule_ReplyWithError(ctx, "arguments are too long");
+        return REDISMODULE_ERR;
+    }
+
+    if (argc > 2) { // argc > 2 means the arguments are not in quoted. i.e. "..."
+      char *p = (char*)temp;
+      while (*p++) *p = *p == 32? 7: *p; // Convert all spaces in tabs, then convert back during parsing
+    }
+    strcat(s, temp);
+  }
+
+  int step = 0;
+  char temp[1024] = "";
+  char stmField[1024] = "";
+  char stmValue[1024] = "";
+
+  char *p;
+  char *token = strtok(s, " ");
+  while (token != NULL) {
+    if (token[0] == 39) {
+      strcpy(temp, &token[1]);
+      strcat(temp, " ");
+      strcat(temp, strtok(NULL, "'"));
+      strcpy(token, temp);
+    }
+    switch(step) {
+      case 0:
+        if (strcmp("into", token) == 0)
+          step = -1;
+        else {
+            RedisModule_ReplyWithError(ctx, "into keyword is expected");
+            return REDISMODULE_ERR;
+        }
+        break;
+      case -1:
+        // parse into key, assume time+rand always is new key
+        intoKey = RMUtil_CreateFormattedString(ctx, "%s:%u-%i", token, (unsigned)time(NULL), rand());
+        step = -2;
+        break;
+      case -2:
+        if (token[0] == '(') {
+          strcpy(stmField, &token[1]);
+          if (token[strlen(token) - 1] == ')') {
+            stmField[strlen(stmField) - 1] = 0;
+            step = -4;
+          }
+          else
+            step = -3;
+        }
+        else if (strcmp("values", token) == 0)
+          step = -5;
+        else {
+            RedisModule_ReplyWithError(ctx, "values keyword is expected");
+            return REDISMODULE_ERR;
+        }
+        break;
+      case -3:
+        if (token[strlen(token) - 1] == ')') {
+          token[strlen(token) - 1] = 0;
+          strcat(stmField, token);
+          step = -4;
+        }
+        break;
+      case -4:
+        if (strcmp("values", token) == 0)
+          step = -5;
+        else {
+            RedisModule_ReplyWithError(ctx, "values keyword is expected");
+            return REDISMODULE_ERR;
+        }
+        break;
+      case -5:
+      case -6:
+        p = token;
+        while (*p++) *p = *p == 7? 32: *p;
+        if (token[0] == '(') {
+          strcpy(stmValue, &token[1]);
+          if (token[strlen(token) - 1] == ')') {
+            stmValue[strlen(stmValue) - 1] = 0;
+            step = 7;
+          }
+          else
+            step = -6;
+        }
+        else if (token[strlen(token) - 1] == ')') {
+          token[strlen(token) - 1] = 0;
+          strcat(stmValue, token);
+          step = 7;
+        }
+        else
+          strcat(stmValue, token);
+        break;
+      case 7:
+        RedisModule_ReplyWithError(ctx, "The end of statement is expected");
+        return REDISMODULE_ERR;
+        break;
+    }
+    token = strtok(NULL, " ");
+  }
+
+  if (step < 7) {
+    RedisModule_ReplyWithError(ctx, "parse error");
+    return REDISMODULE_ERR;
+  }
+
+  Vector *vField = splitStringByChar(stmField, ",");
+  Vector *vValue = splitStringByChar(stmValue, ",");
+
+  if (Vector_Size(vField) != Vector_Size(vValue)) {
+    RedisModule_ReplyWithError(ctx, "Number of values does not match");
+    return REDISMODULE_ERR;
+  }
+
+  RedisModule_AutoMemory(ctx);
+
+  for (size_t i=0; i<Vector_Size(vField); i++) {
+    char *field, *value;
+    Vector_Get(vField, i, &field);
+    Vector_Get(vValue, i, &value);
+    RedisModuleCallReply *rep = RedisModule_Call(ctx, "HSET", "scc", intoKey, field, value);
+    RedisModule_FreeCallReply(rep);
+  }
+
+  RedisModule_ReplyWithString(ctx, intoKey);
+  RedisModule_FreeString(ctx, intoKey);
+  Vector_Free(vField);
+  Vector_Free(vValue);
+
+  return REDISMODULE_OK;
+}
+
+int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+  if (argc < 2)
+    return RedisModule_WrongArity(ctx);
+
+  // Table
+  RedisModuleString *fromKeys;
+
+  // Process the arguments
+  size_t plen;
+  char s[1024] = "";
+  for (int i=1; i<argc; i++) {
+    if (strlen(s) > 0) strcat(s, " ");
+    const char *temp = RedisModule_StringPtrLen(argv[i], &plen);
+    if (strlen(s) + plen > 1024) {
+        RedisModule_ReplyWithError(ctx, "arguments are too long");
+        return REDISMODULE_ERR;
+    }
+
+    if (argc > 2) { // argc > 2 means the arguments are not in quoted. i.e. "..."
+      char *p = (char*)temp;
+      while (*p++) *p = *p == 32? 7: *p; // Convert all spaces in tabs, then convert back during parsing
+    }
+    strcat(s, temp);
+  }
+
+  int step = 0;
+  char temp[1024] = "";
+  char stmWhere[1024] = "";
+
+  char *token = strtok(s, " ");
+  while (token != NULL) {
+    // If it is beginning in single quote, find the end quote in the following tokens
+    if (token[0] == 39) {
+      strcpy(temp, &token[1]);
+      strcat(temp, " ");
+      strcat(temp, strtok(NULL, "'"));
+      strcpy(token, temp);
+    }
+    switch(step) {
+      case 0:
+        if (strcmp("from", token) == 0)
+          step = -1;
+        else {
+            RedisModule_ReplyWithError(ctx, "from keyword is expected");
+            return REDISMODULE_ERR;
+        }
+        break;
+      case -1:
+        // parse from statement
+        fromKeys = RMUtil_CreateFormattedString(ctx, token);
+        step = 2;
+        break;
+      case 2:
+        if (strcmp("where", token) == 0)
+          step = -3;
+        else {
+          RedisModule_ReplyWithError(ctx, "where statement is expected");
+          return REDISMODULE_ERR;
+        }
+        break;
+      case -3:
+      case 4:
+        if (strlen(stmWhere) + strlen(token) > 512) {
+          RedisModule_ReplyWithError(ctx, "where arguments are too long");
+          return REDISMODULE_ERR;
+        }
+        char *p = token;
+        while (*p++) *p = *p == 7? 32: *p;
+        strcat(stmWhere, token);
+        step = 4;
+        break;
+    }
+    token = strtok(NULL, " ");
+  }
+
+  if (step <= 0) {
+    RedisModule_ReplyWithError(ctx, "parse error");
+    return REDISMODULE_ERR;
+  }
+
+  Vector *vWhere = splitWhereString(stmWhere);
+
+  RedisModule_AutoMemory(ctx);
+
+  /* Convert key to regex */
+  const char *pat = RedisModule_StringPtrLen(fromKeys, &plen);
+  regex_t regex;
+  if (regexCompile(ctx, &regex, pat)) return REDISMODULE_ERR;
+
+  RedisModuleString *scursor = RedisModule_CreateStringFromLongLong(ctx, 0);
+  long long lcursor;
+  size_t affected = 0;
+  do {
+    RedisModuleCallReply *rep = RedisModule_Call(ctx, "SCAN", "s", scursor);
+
+    /* Get the current cursor. */
+    scursor = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(rep, 0));
+    RedisModule_StringToLongLong(scursor, &lcursor);
+
+    /* Filter by pattern matching. */
+    RedisModuleCallReply *keys = RedisModule_CallReplyArrayElement(rep, 1);
+    size_t nKeys = RedisModule_CallReplyLength(keys);
+    for (size_t i = 0; i < nKeys; i++) {
+      RedisModuleString *key = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(keys, i));
+      size_t l;
+      const char *s = RedisModule_StringPtrLen(key, &l);
+      if (!regexec(&regex, s, 1, NULL, 0)) {
+        if (vWhere == NULL || whereRecord(ctx, key, vWhere)) {
+          RedisModule_Call(ctx, "DEL", "s", key);
+          affected++;
+        }
+      }
+      RedisModule_FreeString(ctx, key);
+    }
+
+    RedisModule_FreeCallReply(rep);
+  } while (lcursor);
+
+  RedisModule_FreeString(ctx, scursor);
+
+  RedisModule_ReplyWithLongLong(ctx, affected);
+  RedisModule_FreeString(ctx, fromKeys);
+  Vector_Free(vWhere);
+
+  return REDISMODULE_OK;
+}
+
 int RedisModule_OnLoad(RedisModuleCtx *ctx) {
 
   // Register the module
@@ -424,6 +702,12 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
 
   // Register the command
   if (RedisModule_CreateCommand(ctx, "dbx.select", SelectCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
+    return REDISMODULE_ERR;
+
+  if (RedisModule_CreateCommand(ctx, "dbx.insert", InsertCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
+    return REDISMODULE_ERR;
+
+  if (RedisModule_CreateCommand(ctx, "dbx.delete", DeleteCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
     return REDISMODULE_ERR;
 
   return REDISMODULE_OK;
