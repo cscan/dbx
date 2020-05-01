@@ -261,13 +261,16 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
       strcat(s, temp);
   }
 
+  char *sp = s;
+  if (strncmp("select", sp, 6) == 0) sp += 6;
+
   int step = 0;
   char temp[1024] = "";
   char stmSelect[1024] = "";
   char stmWhere[1024] = "";
   char stmOrder[1024] = "";
 
-  char *token = strtok(s, " ");
+  char *token = strtok(sp, " ");
   while (token != NULL) {
     // If it is beginning in single quote, find the end quote in the following tokens
     if (token[0] == 39) {
@@ -455,13 +458,16 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     strcat(s, temp);
   }
 
+  char *sp = s;
+  if (strncmp("insert", sp, 6) == 0) sp += 6;
+
   int step = 0;
   char temp[1024] = "";
   char stmField[1024] = "";
   char stmValue[1024] = "";
 
   char *p;
-  char *token = strtok(s, " ");
+  char *token = strtok(sp, " ");
   while (token != NULL) {
     if (token[0] == 39) {
       strcpy(temp, &token[1]);
@@ -600,11 +606,14 @@ int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     strcat(s, temp);
   }
 
+  char *sp = s;
+  if (strncmp("delete", sp, 6) == 0) sp += 6;
+
   int step = 0;
   char temp[1024] = "";
   char stmWhere[1024] = "";
 
-  char *token = strtok(s, " ");
+  char *token = strtok(sp, " ");
   while (token != NULL) {
     // If it is beginning in single quote, find the end quote in the following tokens
     if (token[0] == 39) {
@@ -707,6 +716,25 @@ int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   return REDISMODULE_OK;
 }
 
+int ExecCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+  if (argc < 2)
+    return RedisModule_WrongArity(ctx);
+
+  size_t plen;
+  const char *arg = RedisModule_StringPtrLen(argv[1], &plen);
+
+  if (strncmp(arg, "select", 6) == 0)
+    return SelectCommand(ctx, argv, argc);
+  else if (strncmp(arg, "insert", 6) == 0)
+    return InsertCommand(ctx, argv, argc);
+  else if (strncmp(arg, "delete", 6) == 0)
+    return DeleteCommand(ctx, argv, argc);
+  else {
+    RedisModule_ReplyWithError(ctx, "parse error");
+    return REDISMODULE_ERR;
+  }
+}
+
 int RedisModule_OnLoad(RedisModuleCtx *ctx) {
 
   // Register the module
@@ -721,6 +749,10 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
     return REDISMODULE_ERR;
 
   if (RedisModule_CreateCommand(ctx, "dbx.delete", DeleteCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
+    return REDISMODULE_ERR;
+
+  // Register the command
+  if (RedisModule_CreateCommand(ctx, "dbx", ExecCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
     return REDISMODULE_ERR;
 
   return REDISMODULE_OK;

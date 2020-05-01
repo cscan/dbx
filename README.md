@@ -9,7 +9,7 @@ $ redis-cli
 127.0.0.1:6379> hmset phonebook:0002 name "Betty Joan"       tel "1-444-9999-1112" birth "2019-12-01" pos 1 gender "F"
 127.0.0.1:6379> hmset phonebook:0003 name "Bloody Mary"      tel "1-666-1234-9812" birth "2018-01-31" pos 2 gender "F"
 127.0.0.1:6379> hmset phonebook:0004 name "Mattias Swensson" tel "1-888-3333-1412" birth "2017-06-30" pos 4 gender "M"
-127.0.0.1:6379> dbx.select name,tel from phonebook where gender = "F" order by pos desc
+127.0.0.1:6379> dbx select name,tel from phonebook where gender = "F" order by pos desc
 1) 1) name
    2) "Bloody Mary"
    3) tel
@@ -54,7 +54,7 @@ If you still have problem in loading the module, please visit: https://redis.io/
 #### Select Statement
 You may specify multiple fields separated by comma
 ```bash
-127.0.0.1:6379> dbx.select name, gender, birth from phonebook
+127.0.0.1:6379> dbx select name, gender, birth from phonebook
 1) 1) name
    2) "Betty Joan"
    3) gender
@@ -83,7 +83,7 @@ You may specify multiple fields separated by comma
 
 "*" is support
 ```bash
-127.0.0.1:6379> dbx.select * from phonebook where birth > '2019-11-11'
+127.0.0.1:6379> dbx select * from phonebook where birth > '2019-11-11'
 1)  1) "name"
     2) "Betty Joan"
     3) "tel"
@@ -98,7 +98,7 @@ You may specify multiple fields separated by comma
 
 If you want to show the exact keys, you may try rowid()
 ```bash
-127.0.0.1:6379> dbx.select rowid() from phonebook
+127.0.0.1:6379> dbx select rowid() from phonebook
 1) 1) rowid()
    2) "phonebook:1588299191-764848276"
 2) 1) rowid()
@@ -123,12 +123,12 @@ Each record is exactly a hash, you could use raw REDIS commands ``hget, hmget or
 #### Where Clause in Select Statement
 Your could specify =, >, <, >=, <=, <>, != or like conditions in where clause. Now the module only support "and" to join multiple conditions.
 ```bash
-127.0.0.1:6379> dbx.select tel from phonebook where name like Son
+127.0.0.1:6379> dbx select tel from phonebook where name like Son
 1) 1) tel
    2) "1-888-3333-1412"
 2) 1) tel
    2) "1-456-1246-3421"
-127.0.0.1:6379> dbx.select tel from phonebook where name like Son and pos = 4
+127.0.0.1:6379> dbx select tel from phonebook where name like Son and pos = 4
 1) 1) tel
    2) "1-888-3333-1412"
 ```
@@ -136,42 +136,42 @@ Your could specify =, >, <, >=, <=, <>, != or like conditions in where clause. N
 #### Order Clause in Select Statement
 Ordering can be ascending or descending. All sortings are alpha-sort.
 ```bash
-127.0.0.1:6379> dbx.select * from phonebook order by pos asc
+127.0.0.1:6379> dbx select * from phonebook order by pos asc
 ...
-127.0.0.1:6379> dbx.select * from phonebook order by pos desc
+127.0.0.1:6379> dbx select * from phonebook order by pos desc
 ...
 ```
 
 #### Delete Statement
 You may also use Insert and Delete statement to operate the hash. If you does not provide the where clause, it will delete all the records of the specified key prefix. (i.e. phonebook)
 ```bash
-127.0.0.1:6379> dbx.delete from phonebook where gender = F
+127.0.0.1:6379> dbx delete from phonebook where gender = F
 (integer) 2
-127.0.0.1:6379> dbx.delete from phonebook
+127.0.0.1:6379> dbx delete from phonebook
 (integer) 2
 ```
 
 #### Insert Statement
 The module provide simple Insert statement which same as the function of the REDIS command hmset. It will append a random string to your provided key (i.e. phonebook). If operation is successful, it will return the key name.
 ```bash
-127.0.0.1:6379> dbx.insert into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson'     ,1-456-1246-3421, 2019-10-01, 3, M)
+127.0.0.1:6379> dbx insert into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson'     ,1-456-1246-3421, 2019-10-01, 3, M)
 "phonebook:1588298418-551514504"
-127.0.0.1:6379> dbx.insert into phonebook (name,tel,birth,pos,gender) values ('Betty Joan'       ,1-444-9999-1112, 2019-12-01, 1, F)
+127.0.0.1:6379> dbx insert into phonebook (name,tel,birth,pos,gender) values ('Betty Joan'       ,1-444-9999-1112, 2019-12-01, 1, F)
 "phonebook:1588299191-764848276"
-127.0.0.1:6379> dbx.insert into phonebook (name,tel,birth,pos,gender) values ('Bloody Mary'      ,1-666-1234-9812, 2018-01-31, 2, F)
+127.0.0.1:6379> dbx insert into phonebook (name,tel,birth,pos,gender) values ('Bloody Mary'      ,1-666-1234-9812, 2018-01-31, 2, F)
 "phonebook:1588299196-2115347437"
-127.0.0.1:6379> dbx.insert into phonebook (name,tel,birth,pos,gender) values ('Mattias Swensson' ,1-888-3333-1412, 2017-06-30, 4, M)
+127.0.0.1:6379> dbx insert into phonebook (name,tel,birth,pos,gender) values ('Mattias Swensson' ,1-888-3333-1412, 2017-06-30, 4, M)
 "phonebook:1588299202-1052597574"
 ```
 Note that Redis requires at least one space after the single and double quoted arguments.
 Or you may quote the whole SQL statement as below:
 ```bash
-127.0.0.1:6379> dbx.insert "into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson','1-456-1246-3421','2019-10-01',3, 'M')"
+127.0.0.1:6379> dbx "insert into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson','1-456-1246-3421','2019-10-01',3, 'M')"
 ```
 
 #### Issue command from BASH shell
 ```bash
-$ redis-cli dbx.select "*" from phonebook where gender = M order by pos desc
+$ redis-cli dbx select "*" from phonebook where gender = M order by pos desc
 1)  1) "name"
     2) "Mattias Swensson"
     3) "tel"
@@ -192,13 +192,13 @@ $ redis-cli dbx.select "*" from phonebook where gender = M order by pos desc
     8) "3"
     9) "gender"
    10) "M"
-$ redis-cli dbx.select name from phonebook where tel like 9812
+$ redis-cli dbx select name from phonebook where tel like 9812
 1) 1) name
    2) "Bloody Mary"
 ```
 Note that "*" requires double quoted otherwise it will pass all the filename in current directory. Of course you could quote the whole SQL statement.
 ```bash
-$ redis-cli dbx.select "* from phonebook where gender = M order by pos desc"
+$ redis-cli dbx "select * from phonebook where gender = M order by pos desc"
 ```
 
 ## Compatibility
