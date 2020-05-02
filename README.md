@@ -49,7 +49,7 @@ loadmodule /path/to/dbx.so
 
 If you still have problem in loading the module, please visit: https://redis.io/topics/modules-intro
 
-## More Example
+## More Examples
 
 #### Select Statement
 You may specify multiple fields separated by comma
@@ -272,8 +272,7 @@ The module provide simple Insert statement which same as the function of the RED
 10) "M"
 127.0.0.1:6379>
 ```
-Note that Redis requires at least one space after the single and double quoted arguments.
-Or you may quote the whole SQL statement as below:
+Note that Redis requires at least one space after the single and double quoted arguments, otherwise you will get ``Invalid argument(s)`` error. If you don't want to take care of this, you could quote the whole SQL statement by double quote as below:
 ```sql
 127.0.0.1:6379> dbx "insert into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson','1-456-1246-3421','2019-10-01',3, 'M')"
 ```
