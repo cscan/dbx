@@ -220,7 +220,7 @@ Vector* splitWhereString(char *s) {
   return v;
 }
 
-size_t processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere, char *intoKey, long top) {
+size_t processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere, char *intoKey, long *top) {
   size_t nKeys = RedisModule_CallReplyLength(keys);
   size_t affected = 0;
   for (size_t i = 0; i < nKeys; i++) {
@@ -234,11 +234,11 @@ size_t processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *
         else
           showRecord(ctx, key, vSelect);
         affected++;
-        top--;
-        printf("%zu\n", affected);
+        (*top)--;
       }
     }
     RedisModule_FreeString(ctx, key);
+    if (*top == 0) return affected;
   }
   return affected;
 }
@@ -456,6 +456,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModuleCallReply *rep;
 
     if (buildSetByPattern(ctx, &regex, setName, vWhere) > 0) {
+      size_t n = 0;
       // Sort the fields under the key and send the resulting array to processRecords module
       char *field;
       Vector_Get(vOrder, 0, &field);
@@ -468,7 +469,8 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         sprintf(stmt, "*->%s", field);
         rep = RedisModule_Call(ctx, "SORT", "cccc", setName, "by", stmt, "alpha");
       }
-      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL, intoKey, top);
+      n += processRecords(ctx, rep, &regex, vSelect, NULL, intoKey, &top);
+
       RedisModule_FreeCallReply(rep);
 
       // set number of output
@@ -493,10 +495,11 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
       /* Filter by pattern matching. */
       RedisModuleCallReply *rkeys = RedisModule_CallReplyArrayElement(rep, 1);
+      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere, intoKey, &top);
 
-      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere, intoKey, top);
-
+      RedisModule_FreeCallReply(rkeys);
       RedisModule_FreeCallReply(rep);
+      if (top == 0) break;
     } while (lcursor);
 
     RedisModule_ReplySetArrayLength(ctx, n);

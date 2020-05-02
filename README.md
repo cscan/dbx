@@ -136,10 +136,51 @@ Your could specify =, >, <, >=, <=, <>, != or like conditions in where clause. N
 #### Order Clause in Select Statement
 Ordering can be ascending or descending. All sortings are alpha-sort.
 ```sql
-127.0.0.1:6379> dbx select * from phonebook order by pos asc
-...
-127.0.0.1:6379> dbx select * from phonebook order by pos desc
-...
+127.0.0.1:6379> dbx select name, pos from phonebook order by pos asc
+1) 1) name
+   2) "Betty Joan"
+   3) pos
+   4) "1"
+2) 1) name
+   2) "Bloody Mary"
+   3) pos
+   4) "2"
+3) 1) name
+   2) "Peter Nelson"
+   3) pos
+   4) "3"
+4) 1) name
+   2) "Mattias Swensson"
+   3) pos
+   4) "4"
+127.0.0.1:6379> dbx select name from phonebook order by pos desc
+1) 1) name
+   2) "Mattias Swensson"
+2) 1) name
+   2) "Peter Nelson"
+3) 1) name
+   2) "Bloody Mary"
+4) 1) name
+   2) "Betty Joan"
+```
+
+#### Top Clause in Select Statement
+```sql
+127.0.0.1:6379> dbx select top 3 name, tel from phonebook order by pos desc
+1) 1) name
+   2) "Mattias Swensson"
+   3) tel
+   4) "1-888-3333-1412"
+2) 1) name
+   2) "Peter Nelson"
+   3) tel
+   4) "1-456-1246-3421"
+3) 1) name
+   2) "Bloody Mary"
+   3) tel
+   4) "1-666-1234-9812"
+127.0.0.1:6379> dbx select top 0 * from phonebook
+(empty list or set)
 ```
 
 #### Into Clause in Select Statement
