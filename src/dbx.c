@@ -220,7 +220,7 @@ Vector* splitWhereString(char *s) {
   return v;
 }
 
-int processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere, char *intoKey) {
+size_t processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere, char *intoKey, long top) {
   size_t nKeys = RedisModule_CallReplyLength(keys);
   size_t affected = 0;
   for (size_t i = 0; i < nKeys; i++) {
@@ -234,6 +234,8 @@ int processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, 
         else
           showRecord(ctx, key, vSelect);
         affected++;
+        top--;
+        printf("%zu\n", affected);
       }
     }
     RedisModule_FreeString(ctx, key);
@@ -242,7 +244,7 @@ int processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, 
 }
 
 /* Create temporary set for sorting */
-int buildSetByPattern(RedisModuleCtx *ctx, regex_t *r, char *setName, Vector *vWhere) {
+size_t buildSetByPattern(RedisModuleCtx *ctx, regex_t *r, char *setName, Vector *vWhere) {
   RedisModule_Call(ctx, "DEL", "c", setName);
   RedisModuleString *scursor = RedisModule_CreateStringFromLongLong(ctx, 0);
   long long lcursor;
@@ -282,6 +284,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return RedisModule_WrongArity(ctx);
 
   // Table
+  long top = 0;
   RedisModuleString *fromKeys;
   char intoKey[32] = "";
 
@@ -327,10 +330,28 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
     switch(step) {
       case 0:
+        if (strcmp("top", token) == 0) {
+          step = -2;
+          break;
+        }
+        step = -1;
+      case -1:
+        if (strlen(token) > 512) {
+          RedisModule_ReplyWithError(ctx, "select arguments are too long");
+          return REDISMODULE_ERR;
+        }
+        strcat(stmSelect, token);
+        step = -3;
+        break;
+      case -2:
+        top = atol(token);
+        step = -1;
+        break;
+      case -3:
         if (strcmp("into", token) == 0)
-          step = -1;
+          step = -4;
         else if (strcmp("from", token) == 0)
-          step = -3;
+          step = -6;
         else {
           if (strlen(stmSelect) + strlen(token) > 512) {
             RedisModule_ReplyWithError(ctx, "select arguments are too long");
@@ -339,35 +360,35 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
           strcat(stmSelect, token);
         }
         break;
-      case -1:
+      case -4:
         // parse into clause, assume time+rand always is new key
         strcpy(intoKey, token);
-        step = -2;
+        step = -5;
         break;
-      case -2:
+      case -5:
         if (strcmp("from", token) == 0)
-          step = -3;
+          step = -6;
         else {
           RedisModule_ReplyWithError(ctx, "from keyword is expected");
           return REDISMODULE_ERR;
         }
         break;
-      case -3:
+      case -6:
         // parse from clause
         fromKeys = RMUtil_CreateFormattedString(ctx, token);
-        step = 4;
+        step = 7;
         break;
-      case 4:
+      case 7:
         if (strcmp("where", token) == 0)
-          step = -5;
+          step = -8;
         else if (strcmp("order", token) == 0)
-          step = -7;
+          step = -10;
         break;
-      case -5:
-      case 6:
+      case -8:
+      case 9:
         // parse where clause
         if (strcmp("order", token) == 0)
-          step = -7;
+          step = -10;
         else if (strcmp("and", token) == 0)
           strcat(stmWhere, "&&");
         else {
@@ -378,19 +399,19 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
           char *p = token;
           while (*p++) *p = *p == 7? 32: *p;
           strcat(stmWhere, token);
-          step = 6;
+          step = 9;
         }
         break;
-      case -7:
+      case -10:
         if (strcmp("by", token) == 0)
-          step = -8;
+          step = -11;
         else {
           RedisModule_ReplyWithError(ctx, "missing 'by' after order");
           return REDISMODULE_ERR;
         }
         break;
-      case -8:
-      case 9:
+      case -11:
+      case 12:
         // parse order clause
         if (strlen(stmOrder) + strlen(token) > 512) {
           RedisModule_ReplyWithError(ctx, "order arguments are too long");
@@ -401,7 +422,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         else
         if (strcmp("asc", token) != 0)
           strcat(stmOrder, token);
-        step = 9;
+        step = 12;
         break;
     }
     token = strtok(NULL, " ");
@@ -447,7 +468,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         sprintf(stmt, "*->%s", field);
         rep = RedisModule_Call(ctx, "SORT", "cccc", setName, "by", stmt, "alpha");
       }
-      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL, intoKey);
+      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL, intoKey, top);
       RedisModule_FreeCallReply(rep);
 
       // set number of output
@@ -473,7 +494,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
       /* Filter by pattern matching. */
       RedisModuleCallReply *rkeys = RedisModule_CallReplyArrayElement(rep, 1);
 
-      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere, intoKey);
+      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere, intoKey, top);
 
       RedisModule_FreeCallReply(rep);
     } while (lcursor);
