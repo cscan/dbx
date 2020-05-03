@@ -1,6 +1,6 @@
-# Redis Module for maintaining hash by simple SQL (Also provide csv import function)
+# Redis Module for maintaining hash by simple SQL (Support csv import/export)
 
-This module aims to provide simple DML to manipulate the hashes in REDIS for SQL users. It works as simple as you expected. It translates the input statement to a set of pure REDIS commands. It does not need nor generate any intermediate stuffs which occupied your storages. The target data is your hashes only. It also provides the CSV import and export (under construction) function.
+This module aims to provide simple DML to manipulate the hashes in REDIS for SQL users. It works as simple as you expected. It translates the input statement to a set of pure REDIS commands. It does not need nor generate any intermediate stuffs which occupied your storages. The target data is your hashes only. It also provides the CSV import and export function.
 
 ## Usage
 ```sql
@@ -120,7 +120,7 @@ The above is nearly like REDIS keys command
 
 Each record is exactly a hash, you could use raw REDIS commands ``hget, hmget or hgetall`` to retrieve the same content
 
-#### Where clause in select statement
+#### Where clause
 Your could specify =, >, <, >=, <=, <>, != or like conditions in where clause. Now the module only support "and" to join multiple conditions.
 ```sql
 127.0.0.1:6379> dbx select tel from phonebook where name like Son
@@ -133,7 +133,7 @@ Your could specify =, >, <, >=, <=, <>, != or like conditions in where clause. N
    2) "1-888-3333-1412"
 ```
 
-#### Order clause in select statement
+#### Order clause
 Ordering can be ascending or descending. All sortings are alpha-sort.
 ```sql
 127.0.0.1:6379> dbx select name, pos from phonebook order by pos asc
@@ -164,7 +164,7 @@ Ordering can be ascending or descending. All sortings are alpha-sort.
    2) "Betty Joan"
 ```
 
-#### Top clause in select statement
+#### Top clause
 ```sql
 127.0.0.1:6379> dbx select top 3 name, tel from phonebook order by pos desc
 1) 1) name
@@ -183,8 +183,8 @@ Ordering can be ascending or descending. All sortings are alpha-sort.
 (empty list or set)
 ```
 
-#### Into clause in select statement
-You could create another table by into clause.
+#### Into clause for copy hash table
+You could create another hash table by into clause.
 ```sql
 127.0.0.1:6379> dbx select * into testbook from phonebook
 1) testbook:1588325407-1751904058
@@ -239,16 +239,15 @@ You could create another table by into clause.
    10) "F"
 ```
 
-#### Into csv clause in select statement
-(The feature is under construction)
+#### Into csv clause for exporting records in csv format
 ```sql
 127.0.0.1:6379> dbx select * into csv "/tmp/testbook.csv" from phonebook where pos > 2
-(integer) 2
+1) Kevin Louis,111-2123-1233,2009-12-31,6,F
+2) Kenneth Cheng,123-12134-123,2000-12-31,5,M
 127.0.0.1:6379> quit
 $ cat /tmp/testbook.csv
-name,tel,birth,pos,gender
-"Kenneth Cheng","123-12134-123","2000-12-31","5","M"
-"Kevin Louis","111-2123-1233","2009-12-31","6","F"
+Kevin Louis,111-2123-1233,2009-12-31,6,F
+Kenneth Cheng,123-12134-123,2000-12-31,5,M
 $
 ```
 
@@ -290,7 +289,7 @@ Note that Redis requires at least one space after the single and double quoted a
 127.0.0.1:6379> dbx "insert into phonebook (name,tel,birth,pos,gender) values ('Peter Nelson','1-456-1246-3421','2019-10-01',3, 'M')"
 ```
 
-#### From clause for importing CSV file in insert statement
+#### From clause for importing CSV file
 The module provides simple import function by specifying from clause in Insert statement. It only support comma deliminated. Please make sure that the specified import file can be accessed by Redis server.
 ```bash
 $ cat > /tmp/test.csv << EOF

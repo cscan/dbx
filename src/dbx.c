@@ -26,6 +26,12 @@ int regexCompile(RedisModuleCtx *ctx, regex_t *r, const char *t) {
   return 0;
 }
 
+char* trim(char* s, char t) {
+  char* p = s;
+  if (p[strlen(s)-1] == t) p[strlen(s)-1] = 0;
+  if (p[0] == t) p++;
+  return p;
+}
 char* toLower(char* s) {
   for(char *p = s; *p; p++)
     *p = tolower(*p);
@@ -37,8 +43,20 @@ char* toUpper(char* s) {
   return s;
 }
 
+const char* RedisModule_StringToChar(RedisModuleString *s) {
+  size_t l;
+  return RedisModule_StringPtrLen(s, &l);
+}
+
+char* VectorGetString(Vector *v, size_t i) {
+  char *value;
+  Vector_Get(v, i, &value);
+  return value;
+}
+
 int whereRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vWhere) {
-  char *field, *w;
+  //char *field;
+  char *w;
   int condition;
   int match = 1;
 
@@ -47,21 +65,20 @@ int whereRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vWhere) {
   if (n == 0) return 1;
   if (n % 3 != 0) return 0;
   for (size_t i = 0; i < n; i += 3) {
-    Vector_Get(vWhere, i, &field);
+    // Vector_Get(vWhere, i, &field);
     Vector_Get(vWhere, i+1, &condition);
     Vector_Get(vWhere, i+2, &w);
     if (condition == 7)
       toLower(w);
     if (strlen(w) == 0) return 0;
 
-    RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGET", "sc", key, field);
+    RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGET", "sc", key, VectorGetString(vWhere, i));
     if (RedisModule_CallReplyLength(tags) == 0) {
       RedisModule_FreeCallReply(tags);
       return 0;
     }
     RedisModuleString *rms = RedisModule_CreateStringFromCallReply(tags);
-    size_t l;
-    const char *s = RedisModule_StringPtrLen(rms, &l);
+    const char *s = RedisModule_StringToChar(rms);
     switch(condition) {
       case 0:
         match = strcmp(s, w) >= 0? 1: 0;
@@ -179,6 +196,47 @@ void intoRecord(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vSelect, ch
   RedisModule_ReplyWithSimpleString(ctx, newkey);
 }
 
+void intoCSV(RedisModuleCtx *ctx, RedisModuleString *key, Vector *vSelect, char *filename) {
+  char* field;
+  size_t nSelected = Vector_Size(vSelect);
+  char line[1024];
+
+  FILE *fp = fopen(filename, "a");
+  strcpy(line, "");
+  for(size_t i = 0; i < nSelected; i++) {
+    Vector_Get(vSelect, i, &field);
+    // If '*' is specified in selected hash list, display all hashes then
+    if (strcmp(field, "*") == 0) {
+      RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGETALL", "s", key);
+      size_t tf = RedisModule_CallReplyLength(tags);
+      if (tf > 0) {
+        for(size_t j=0; j<tf; j+=2) {
+          // RedisModuleString *rms1 = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(tags, j));
+          RedisModuleString *rms2 = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(tags, j+1));
+          if (strlen(line) > 0) strcat(line, ",");
+          strcat(line, RedisModule_StringToChar(rms2));
+          // RedisModule_FreeString(ctx, rms1);
+          RedisModule_FreeString(ctx, rms2);
+        }
+      }
+      RedisModule_FreeCallReply(tags);
+    }
+    else {
+      if (strlen(line) > 0) strcat(line, ",");
+      RedisModuleCallReply *tags = RedisModule_Call(ctx, "HGET", "sc", key, field);
+      if (RedisModule_CallReplyLength(tags) > 0) {
+        RedisModuleString *rms = RedisModule_CreateStringFromCallReply(tags);
+        strcat(line, RedisModule_StringToChar(rms));
+        RedisModule_FreeString(ctx, rms);
+      }
+      RedisModule_FreeCallReply(tags);
+    }
+  }
+  RedisModule_ReplyWithSimpleString(ctx, line);
+  fprintf(fp, "%s\n", line);
+  fclose(fp);
+}
+
 /* Split the string by specified delimilator */
 Vector* splitStringByChar(char *s, char* d) {
   size_t cap;
@@ -220,16 +278,17 @@ Vector* splitWhereString(char *s) {
   return v;
 }
 
-size_t processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere, char *intoKey, long *top) {
+size_t processRecords(RedisModuleCtx *ctx, RedisModuleCallReply *keys, regex_t *r, Vector *vSelect, Vector *vWhere, long *top, char *intoKey, char *csvFile) {
   size_t nKeys = RedisModule_CallReplyLength(keys);
   size_t affected = 0;
   for (size_t i = 0; i < nKeys; i++) {
     RedisModuleString *key = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(keys, i));
-    size_t l;
-    const char *s = RedisModule_StringPtrLen(key, &l);
+    const char *s = RedisModule_StringToChar(key);
     if (!regexec(r, s, 1, NULL, 0)) {
       if (vWhere == NULL || whereRecord(ctx, key, vWhere)) {
-        if (strlen(intoKey) > 0)
+        if (strlen(csvFile) > 0)
+          intoCSV(ctx, key, vSelect, csvFile);
+        else if (strlen(intoKey) > 0)
           intoRecord(ctx, key, vSelect, intoKey);
         else
           showRecord(ctx, key, vSelect);
@@ -261,8 +320,7 @@ size_t buildSetByPattern(RedisModuleCtx *ctx, regex_t *r, char *setName, Vector 
     size_t nKeys = RedisModule_CallReplyLength(keys);
     for (size_t i = 0; i < nKeys; i++) {
       RedisModuleString *key = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(keys, i));
-      size_t l;
-      const char *s = RedisModule_StringPtrLen(key, &l);
+      const char *s = RedisModule_StringToChar(key);
       if (!regexec(r, s, 1, NULL, 0)) {
         if (vWhere == NULL || whereRecord(ctx, key, vWhere)) {
           RedisModule_Call(ctx, "SADD", "cs", setName, key);
@@ -280,6 +338,8 @@ size_t buildSetByPattern(RedisModuleCtx *ctx, regex_t *r, char *setName, Vector 
 }
 
 int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+  RedisModule_AutoMemory(ctx);
+
   if (argc < 2)
     return RedisModule_WrongArity(ctx);
 
@@ -287,6 +347,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   long top = -1;
   RedisModuleString *fromKeys;
   char intoKey[32] = "";
+  char csvFile[128] = "";
 
   // Process the arguments
   size_t plen;
@@ -362,7 +423,15 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         break;
       case -4:
         // parse into clause, assume time+rand always is new key
-        strcpy(intoKey, token);
+        if (strcmp("csv", token) == 0)
+          step = -45;
+        else {
+          strcpy(intoKey, token);
+          step = -5;
+        }
+        break;
+      case -45:
+        strcpy(csvFile, token);
         step = -5;
         break;
       case -5:
@@ -437,10 +506,8 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   Vector *vWhere = splitWhereString(stmWhere);
   Vector *vOrder = splitStringByChar(stmOrder, ",");
 
-  RedisModule_AutoMemory(ctx);
-
    /* Convert key to regex */
-  const char *pat = RedisModule_StringPtrLen(fromKeys, &plen);
+  const char *pat = RedisModule_StringToChar(fromKeys);
   regex_t regex;
   if (regexCompile(ctx, &regex, pat)) return REDISMODULE_ERR;
 
@@ -479,7 +546,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
       for(int i = 0; i < cap; i++)
         RedisModule_FreeString(ctx, param[i]);
 
-      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL, intoKey, &top);
+      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL, &top, intoKey, csvFile);
 
       RedisModule_FreeCallReply(rep);
       RedisModule_ReplySetArrayLength(ctx, n);
@@ -503,7 +570,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
       /* Filter by pattern matching. */
       RedisModuleCallReply *rkeys = RedisModule_CallReplyArrayElement(rep, 1);
-      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere, intoKey, &top);
+      n += processRecords(ctx, rkeys, &regex, vSelect, vWhere, &top, intoKey, csvFile);
 
       RedisModule_FreeCallReply(rkeys);
       RedisModule_FreeCallReply(rep);
@@ -522,14 +589,9 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   return REDISMODULE_OK;
 }
 
-char* trim(char* s, char t) {
-  char* p = s;
-  if (p[strlen(s)-1] == t) p[strlen(s)-1] = 0;
-  if (p[0] == t) p++;
-  return p;
-}
-
 int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+  RedisModule_AutoMemory(ctx);
+
   if (argc < 2)
     return RedisModule_WrongArity(ctx);
 
@@ -663,11 +725,8 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   Vector *vField = splitStringByChar(stmField, ",");
   Vector *vValue = splitStringByChar(stmValue, ",");
 
-  RedisModule_AutoMemory(ctx);
-
   if (fromCSV != NULL) {
-    size_t len;
-    const char *filename = RedisModule_StringPtrLen(fromCSV, &len);
+    const char *filename = RedisModule_StringToChar(fromCSV);
     FILE *fp = fopen(filename, "r");
     if (fp == NULL) {
       RedisModule_ReplyWithError(ctx, "File does not exist");
@@ -741,6 +800,8 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 }
 
 int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+  RedisModule_AutoMemory(ctx);
+
   if (argc < 2)
     return RedisModule_WrongArity(ctx);
 
@@ -830,10 +891,8 @@ int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
   Vector *vWhere = splitWhereString(stmWhere);
 
-  RedisModule_AutoMemory(ctx);
-
   /* Convert key to regex */
-  const char *pat = RedisModule_StringPtrLen(fromKeys, &plen);
+  const char *pat = RedisModule_StringToChar(fromKeys);
   regex_t regex;
   if (regexCompile(ctx, &regex, pat)) return REDISMODULE_ERR;
 
@@ -852,8 +911,7 @@ int DeleteCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     size_t nKeys = RedisModule_CallReplyLength(keys);
     for (size_t i = 0; i < nKeys; i++) {
       RedisModuleString *key = RedisModule_CreateStringFromCallReply(RedisModule_CallReplyArrayElement(keys, i));
-      size_t l;
-      const char *s = RedisModule_StringPtrLen(key, &l);
+      const char *s = RedisModule_StringToChar(key);
       if (!regexec(&regex, s, 1, NULL, 0)) {
         if (vWhere == NULL || whereRecord(ctx, key, vWhere)) {
           RedisModule_Call(ctx, "DEL", "s", key);
@@ -879,8 +937,7 @@ int ExecCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   if (argc < 2)
     return RedisModule_WrongArity(ctx);
 
-  size_t plen;
-  const char *arg = RedisModule_StringPtrLen(argv[1], &plen);
+  const char *arg = RedisModule_StringToChar(argv[1]);
 
   if (strncmp(arg, "select", 6) == 0)
     return SelectCommand(ctx, argv, argc);
