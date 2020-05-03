@@ -21,7 +21,7 @@ else
 	SHOBJ_CFLAGS ?= -dynamic -fno-common -g -ggdb -lc -lm
 	SHOBJ_LDFLAGS ?= -bundle -undefined dynamic_lookup
 endif
-CFLAGS = -I$(RM_INCLUDE_DIR) -Wall -g -fPIC -std=gnu99  
+CFLAGS = -I$(RM_INCLUDE_DIR) -Wall -g -fPIC -std=gnu99
 CC=gcc
 
 all: rmutil dbx.so

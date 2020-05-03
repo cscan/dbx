@@ -284,7 +284,7 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return RedisModule_WrongArity(ctx);
 
   // Table
-  long top = 0;
+  long top = -1;
   RedisModuleString *fromKeys;
   char intoKey[32] = "";
 
@@ -452,28 +452,36 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     char setName[32];
     sprintf(setName, "__db_tempset_%i", rn++);
 
-    char stmt[128];
     RedisModuleCallReply *rep;
 
     if (buildSetByPattern(ctx, &regex, setName, vWhere) > 0) {
-      size_t n = 0;
-      // Sort the fields under the key and send the resulting array to processRecords module
       char *field;
-      Vector_Get(vOrder, 0, &field);
-      if (field[strlen(field)-1] == '-') {
-        field[strlen(field)-1] = 0;
-        sprintf(stmt, "*->%s", field);
-        rep = RedisModule_Call(ctx, "SORT", "ccccc", setName, "by", stmt, "desc", "alpha");
+      int nSortField = Vector_Size(vOrder);
+      int cap = 3 * nSortField + 2;
+
+      RedisModuleString *param[cap];
+      param[0] = RedisModule_CreateString(ctx, setName, strlen(setName));
+
+      for(int sf = 0; sf < nSortField; sf++) {
+        Vector_Get(vOrder, sf, &field);
+        if (field[strlen(field)-1] == '-') {
+          field[strlen(field)-1] = 0;
+          param[3+sf*3] = RedisModule_CreateString(ctx, "desc", 4);
+        }
+        else
+          param[3+sf*3] = RedisModule_CreateString(ctx, "asc", 3);
+        param[1+sf*3] = RedisModule_CreateString(ctx, "by", 2);
+        param[2+sf*3] = RedisModule_CreateStringPrintf(ctx, "*->%s", field, 3 + strlen(field));
       }
-      else {
-        sprintf(stmt, "*->%s", field);
-        rep = RedisModule_Call(ctx, "SORT", "cccc", setName, "by", stmt, "alpha");
-      }
-      n += processRecords(ctx, rep, &regex, vSelect, NULL, intoKey, &top);
+      param[cap-1] = RedisModule_CreateString(ctx, "alpha", 5);
+      rep = RedisModule_Call(ctx, "SORT", "v", &param, cap);
+
+      for(int i = 0; i < cap; i++)
+        RedisModule_FreeString(ctx, param[i]);
+
+      size_t n = processRecords(ctx, rep, &regex, vSelect, NULL, intoKey, &top);
 
       RedisModule_FreeCallReply(rep);
-
-      // set number of output
       RedisModule_ReplySetArrayLength(ctx, n);
     }
     else
