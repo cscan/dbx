@@ -522,12 +522,20 @@ int SelectCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   return REDISMODULE_OK;
 }
 
+char* trim(char* s, char t) {
+  char* p = s;
+  if (p[strlen(s)-1] == t) p[strlen(s)-1] = 0;
+  if (p[0] == t) p++;
+  return p;
+}
+
 int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   if (argc < 2)
     return RedisModule_WrongArity(ctx);
 
   // Table
-  RedisModuleString *intoKey;
+  char intoKey[128] = "";
+  RedisModuleString *fromCSV = NULL;
 
   // Process the arguments
   size_t plen;
@@ -575,7 +583,7 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         break;
       case -1:
         // parse into clause, assume time+rand always is new key
-        intoKey = RMUtil_CreateFormattedString(ctx, "%s:%u-%i", token, (unsigned)time(NULL), rn++);
+        strcpy(intoKey, token);
         step = -2;
         break;
       case -2:
@@ -590,6 +598,8 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         }
         else if (strcmp("values", token) == 0)
           step = -5;
+        else if (strcmp("from", token) == 0)
+          step = -7;
         else {
             RedisModule_ReplyWithError(ctx, "values keyword is expected");
             return REDISMODULE_ERR;
@@ -605,8 +615,10 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
       case -4:
         if (strcmp("values", token) == 0)
           step = -5;
+        else if (strcmp("from", token) == 0)
+          step = -7;
         else {
-            RedisModule_ReplyWithError(ctx, "values keyword is expected");
+            RedisModule_ReplyWithError(ctx, "values or from keyword is expected");
             return REDISMODULE_ERR;
         }
         break;
@@ -618,7 +630,7 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
           strcpy(stmValue, &token[1]);
           if (token[strlen(token) - 1] == ')') {
             stmValue[strlen(stmValue) - 1] = 0;
-            step = 7;
+            step = 8;
           }
           else
             step = -6;
@@ -626,12 +638,16 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         else if (token[strlen(token) - 1] == ')') {
           token[strlen(token) - 1] = 0;
           strcat(stmValue, token);
-          step = 7;
+          step = 8;
         }
         else
           strcat(stmValue, token);
         break;
-      case 7:
+      case -7:
+        fromCSV = RedisModule_CreateString(ctx, token, strlen(token));
+        step = 8;
+        break;
+      case 8:
         RedisModule_ReplyWithError(ctx, "The end of statement is expected");
         return REDISMODULE_ERR;
         break;
@@ -647,25 +663,79 @@ int InsertCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   Vector *vField = splitStringByChar(stmField, ",");
   Vector *vValue = splitStringByChar(stmValue, ",");
 
-  if (Vector_Size(vField) != Vector_Size(vValue)) {
-    RedisModule_ReplyWithError(ctx, "Number of values does not match");
-    return REDISMODULE_ERR;
-  }
-
   RedisModule_AutoMemory(ctx);
 
-  for (size_t i=0; i<Vector_Size(vField); i++) {
-    char *field, *value;
-    Vector_Get(vField, i, &field);
-    Vector_Get(vValue, i, &value);
-    RedisModuleCallReply *rep = RedisModule_Call(ctx, "HSET", "scc", intoKey, field, value);
-    RedisModule_FreeCallReply(rep);
-  }
+  if (fromCSV != NULL) {
+    size_t len;
+    const char *filename = RedisModule_StringPtrLen(fromCSV, &len);
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL) {
+      RedisModule_ReplyWithError(ctx, "File does not exist");
+      return REDISMODULE_ERR;
+    }
+    char line[1024];
+    char *value, *field;
+    size_t n = 0;
+    RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
 
-  RedisModule_ReplyWithString(ctx, intoKey);
-  RedisModule_FreeString(ctx, intoKey);
-  Vector_Free(vField);
-  Vector_Free(vValue);
+    while(fgets(line, 1024, fp) != NULL) {
+      if (line[strlen(line)-1] == 10) line[strlen(line)-1] = 0;
+      if (line[strlen(line)-1] == 13) line[strlen(line)-1] = 0;
+
+      value = strtok(line, ",");
+      if (Vector_Size(vField) == 0) {
+        while (value != NULL) {
+          if (strlen(stmField) > 0) strcat(stmField, ",");
+          strcat(stmField, trim(value, '"'));
+          value = strtok(NULL, ",");
+        }
+        if (vField) Vector_Free(vField);
+        vField = splitStringByChar(stmField, ",");
+        continue;
+      }
+
+      RedisModuleString *key = RedisModule_CreateStringPrintf(ctx, "%s:%u-%i", intoKey, (unsigned)time(NULL), rn++);
+      for (size_t i=0; i<Vector_Size(vField); i++) {
+        if (value == NULL) {
+          RedisModule_ReplyWithError(ctx, "Number of values does not match");
+          return REDISMODULE_ERR;
+        }
+        Vector_Get(vField, i, &field);
+        RedisModuleCallReply *rep = RedisModule_Call(ctx, "HSET", "scc", key, field, trim(value, '"'));
+        RedisModule_FreeCallReply(rep);
+        value = strtok(NULL, ",");
+      }
+      n++;
+      RedisModule_ReplyWithString(ctx, key);
+      RedisModule_FreeString(ctx, key);
+    }
+    fclose(fp);
+    RedisModule_ReplySetArrayLength(ctx, n);
+  }
+  else {
+    if (Vector_Size(vField) != Vector_Size(vValue)) {
+      RedisModule_ReplyWithError(ctx, "Number of values does not match");
+      return REDISMODULE_ERR;
+    }
+
+    char *field, *value;
+    size_t n = 0;
+    RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
+
+    RedisModuleString *key = RMUtil_CreateFormattedString(ctx, "%s:%u-%i", intoKey, (unsigned)time(NULL), rn++);
+    for (size_t i=0; i<Vector_Size(vField); i++) {
+      Vector_Get(vField, i, &field);
+      Vector_Get(vValue, i, &value);
+      RedisModuleCallReply *rep = RedisModule_Call(ctx, "HSET", "scc", key, field, trim(value, '"'));
+      RedisModule_FreeCallReply(rep);
+    }
+    n++;
+    RedisModule_ReplyWithString(ctx, key);
+    RedisModule_FreeString(ctx, key);
+    RedisModule_ReplySetArrayLength(ctx, n);
+  }
+  if (vField) Vector_Free(vField);
+  if (vValue) Vector_Free(vValue);
 
   return REDISMODULE_OK;
 }
